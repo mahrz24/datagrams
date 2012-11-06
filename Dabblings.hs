@@ -1,4 +1,11 @@
-{-# LANGUAGE ExistentialQuantification, MultiParamTypeClasses, FlexibleInstances, TypeFamilies, RecordWildCards, FlexibleContexts #-}
+{-# LANGUAGE ExistentialQuantification, MultiParamTypeClasses, RankNTypes, FlexibleInstances, TypeFamilies, RecordWildCards, FlexibleContexts #-}
+
+import qualified Diagrams.Prelude as D
+import Diagrams.Prelude ((#))
+import Diagrams.Backend.Cairo
+import Diagrams.Backend.Cairo.Internal
+
+import Data.Monoid
 
 import Prelude hiding (lookup, zip)
 import qualified Data.Map as Map
@@ -6,6 +13,8 @@ import Data.Key hiding (zipWith)
 import Data.List hiding (lookup, zip)
 import Data.Maybe
 import Debug.Trace
+
+import Data.Colour.CIE
 
 class Keyed t => MutableKeys t where
   crossWith :: (FoldableWithKey t1, FoldableWithKey t2, Ord (Key t)) =>
@@ -81,6 +90,8 @@ showTypedRange r Continuous = "[" ++ (show $ minimum r) ++ "," ++ (show $ maximu
 showTypedDomain dt (Domain rs) = intercalate " x " $ 
   map (\(r,t) -> showTypedRange r t) $ zip (map (\(Range r) -> r) rs) dt
 
+-- Todo include Object -> Domain mapping
+
 data Varset l c d m = Varset { label :: [l]
                              , codomain :: Codomain c
                              , domain :: [Domain d]
@@ -139,6 +150,10 @@ nonEmptyIntersect a b = let c = intersect a b
 domainToKeys :: Domain a -> [[a]]
 domainToKeys (Domain ranges) = foldr inflate [[]] ranges
   where inflate (Range vs) rs = concatMap (\r -> map (\v -> v : r) vs) rs
+
+infixr 7 ///
+infixr 6 /*/
+infixr 5 /+/
 
 class Crossable a b c ma mb mc
   where
@@ -202,3 +217,52 @@ instance (a ~ b, b ~ c, Ord (Key m), (Key m) ~ [a], Eq a, Show a, Ord a)
           domainOverlap a b = length (filter id $ zipWith rangeOverlap a b) <= 1
           domainUnion dss = map (\(d:ds) -> Domain $ foldr du d ds) dss
           du nd d = zipWith rangeUnion d nd
+
+-- TODO: map varsets
+
+-- Graphics
+
+-- Shapes: dot, sqr, cross, diamond, tri
+
+-- Colour
+
+-- Also point :: ShapeSpec -> Varset l c Double -> Varset l c D.Diagram b D.R2
+-- Need to handle several domains, general domain split function, include domain mapping
+-- in varset
+
+type ShapeSpec d b = [d] -> D.Diagram b D.R2
+
+infixr 4 <#>
+(<#>) f g = \ds -> (f ds) # (g ds)
+
+-- Aka const
+shape :: D.Diagram b D.R2 -> [d] -> D.Diagram b D.R2
+shape dia _ = dia
+
+varshape f ds = f (ds !! 0)
+
+position ds = D.translate (D.r2 (ds !! 0, ds !! 1))
+
+pick :: [Int] -> [a] -> [a]
+pick ids xs  = ids # map(xs !!)
+
+dimsel :: [Int] -> ([d] -> a) -> ([d] -> a)
+dimsel ids f = \ds -> f (pick ids ds)
+
+point :: (FoldableWithKey m, (Key m) ~ [Double],
+            D.PathLike (D.Diagram b D.R2)) 
+          => ShapeSpec Double b 
+          -> Varset l c Double m 
+          -> D.Diagram b D.R2
+point shapeSpec (Varset l (Codomain codom) dom dt objM) =
+  foldrWithKey pointGen D.mempty objM
+  where pointGen ds obj diagram = (shapeSpec ds) `D.atop` diagram
+
+
+testVarset = ((fromList "Test" [1,2,3,4]) /*/ (fromList "Bla" [0.5,0.2,0.1,0.8])) /*/ (fromList "Bla" [2,1,4,3])
+
+dia :: D.Diagram Cairo D.R2
+dia = point (varshape (\d -> (D.circle $ d*0.5) # (D.fc $ cieXYZ d d 0.5)) # dimsel [1] <#> position # dimsel [0,2]) testVarset
+
+
+testRender = do fst $ D.renderDia Cairo (CairoOptions "test.pdf" (D.Dims 200 200) PDF) dia
